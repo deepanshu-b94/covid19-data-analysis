@@ -1,0 +1,672 @@
+---
+title: "Covid19 project"
+author: "Deepanshu Bhasin"
+date: "07/04/2020"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## 8. APPENDIX (RCode)
+
+
+```{r warning=FALSE,message=FALSE}
+#getwd()
+library(ggplot2)
+library(janitor)
+library(dplyr)
+library(tidyverse)
+library(caret)
+library(corrplot)
+library(DMwR)
+library(reshape2)
+library(e1071)
+library(MLmetrics)
+library(scatterplot3d)
+library(randomForest)
+library(mlbench)
+```
+
+##SECTION 0
+Importing data
+```{r}
+data <- read.csv('F:/Deepanshu/WESTERNU/SUBJECTS/Winter2020/Stats Mod 2/project/dataset.csv')
+```
+Replacing unnecessary spaces and other characters that can further become problematic
+```{r}
+data <- data %>% 
+  rename_all(., ~janitor::make_clean_names(.))
+#str(data)
+```
+
+
+## SECTION 1 EXPLORATORY DATA ANALYSIS
+### 1.1 Data Cleaning
+
+Figure 1.1a - Creating visualization report to check proportion of missing values
+```{r warning=FALSE,message=FALSE, include=TRUE, fig.height=15, fig.width=12}
+na_cols = apply(is.na(data),2,sum)
+na_dfs = data.frame("key" = colnames(data), "count_NA" = na_cols)
+na_dfs = na_dfs[with(na_dfs, order(-count_NA)),]
+ggplot(na_dfs, aes(reorder(key,count_NA),count_NA/5644,fill = count_NA)) +
+  geom_bar(stat = "identity") + theme_minimal() + coord_flip()+
+  labs(title = "", x = "Variables",y='% of Missing Values', fill= "Count")
+```
+
+It can be noted that there is a strong presence of missing data in many attributes.
+
+Removing 100% empty columns
+```{r}
+total_NA_cols <- data %>%
+  select_if(~sum(is.na(.x))== nrow(data))%>%
+  colnames()
+
+total_NA_cols
+data <- data %>%
+  dplyr::select(-one_of(total_NA_cols))
+```
+
+## TASK1
+Removing unnecessary columns like Patient_ID and target variables for Task2 from data 
+```{r}
+data_reduced<-data %>%
+  dplyr::select(-c(patient_id,patient_addmited_to_regular_ward_1_yes_0_no,patient_addmited_to_semi_intensive_unit_1_yes_0_no,patient_addmited_to_intensive_care_unit_1_yes_0_no))
+```
+
+Removing 100% empty rows-NO EXAM TAKEN
+```{r}
+total_NA_rows  <- data_reduced %>%
+  select_if (~!sum(!is.na(.x))==nrow(data_reduced))%>%
+  {apply (.,1 ,function(x){sum(is.na(x))})!= ncol(.)}%>%
+  which ()
+
+data_reduced <-  data_reduced %>% slice(total_NA_rows)
+```
+
+Converting all categories to character
+```{r}
+data_reduced  <- 
+  data_reduced %>%
+  mutate_if(is.factor,as.character)
+```
+
+Missing values in character variables
+```{r}
+data_reduced%>%
+  select_if(is.character) %>% 
+  purrr::map(~table(.,useNA ='ifany'))
+```
+
+```{r}
+count_along_row_NA <- which((apply(is.na(data_reduced),1,sum) == 63))
+data_reduced <- data_reduced[-count_along_row_NA, ]
+
+dim(data_reduced)
+```
+
+Removing response for time being
+```{r}
+exam_res<-data_reduced$sars_cov_2_exam_result
+data_reduced<-data_reduced[,-2]
+```
+
+## Transformation
+Converting to numeric
+```{r}
+data_reduced$urine_leukocytes <- as.numeric(ifelse(data_reduced$urine_leukocytes == "<1000", 999, data_reduced$urine_leukocytes));
+
+#patient_age_quantile
+data_reduced$patient_age_quantile<-as.numeric(data_reduced$patient_age_quantile)
+```
+
+Separating categorical and numerical data
+```{r}
+type_var<-sapply(data_reduced, typeof)
+
+index_col <- which(type_var=="character"|type_var=="logical")
+
+data_categ <-data_reduced[,index_col]
+
+data_numeric<-data_reduced[,-index_col]
+```
+
+categorical character data
+Converting categorical to factors
+```{r}
+data_categ<-data.frame(lapply(data_categ,as.factor))
+#summary(data_categ)
+```
+
+```{r}
+levels_categ <- lapply(data_categ,levels)
+
+#Transform levels into numeric
+data_categ<-data.frame(lapply(data_categ,as.numeric))
+```
+
+```{r}
+#produced all numeric data
+data_all_num<-cbind(data_categ,data_numeric)
+```
+```{r}
+#added response variable back to dataset and renamed it as 'task1_resp'
+data_task1<-cbind(exam_res,data_all_num)
+data_task1<-data_task1%>%
+  rename(task1_resp=exam_res)
+```
+
+Figure 1.1b - Checking count of missing values
+```{r, include=TRUE, fig.height=12, fig.width= 12}
+apply(is.na(data_task1), 2, sum) %>% 
+  sort() %>% 
+  as.matrix() %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>% 
+  rename(variable = rowname, na_count = V1) %>% 
+  ggplot(aes(x = reorder(variable, na_count), y = na_count)) +
+  geom_col() + 
+  geom_text(aes(x = variable, y = na_count + 35, label = na_count, angle = 90), size = 3.5) +
+  labs(x = 'variable', title = 'Variables ordered by NA count') +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+Selected first few columns and removed columns having count of NAs greater than 7
+```{r}
+min_NA_col<-apply(is.na(data_task1),2, sum)
+
+data_task1<-data_task1[,min_NA_col<=7]
+
+```
+
+Dropping rows still having NA values in columns
+```{r}
+data_task1<-data_task1%>%
+  drop_na()
+```
+
+### 1.2 Visualizations
+Fugure 1.2a - Checking correlation
+```{r include=TRUE, fig.height=22, fig.width= 40}
+corrplot::corrplot(cor(data_task1[,-1]),method="number",title = "Correlation plot",
+                   type = "upper",number.cex = .8, tl.cex = 1.5)
+```
+
+Removing medical test data with high correlation
+```{r}
+data_task1<-data_task1[-c(2:20)]
+#colnames(data_task1)
+```
+
+Removing clinical urine test data with high correlation
+```{r}
+data_task1<-data_task1[-c(3:8)]
+#colnames(data_task1)
+```
+```{r}
+data_task1<-data_task1[-c(4:10)]
+#colnames(data_task1)
+```
+
+Figure 1.2b - checking multicollinearity for few variables to keep only 1 of them
+```{r include=TRUE, fig.height=12, fig.width= 12}
+par(mfrow=c(1,4))
+plot(data_task1$mean_corpuscular_hemoglobin_concentration_mch,data_task1$mean_corpuscular_volume_mcv)
+plot(data_task1$hemoglobin,data_task1$red_blood_cells)
+plot(data_task1$hematocrit,data_task1$red_blood_cells)
+plot(data_task1$hematocrit,data_task1$hemoglobin)
+```
+
+Removing columns to avoid multicollinearity
+```{r}
+data_task1<-data_task1%>%
+  dplyr::select(-c(hematocrit, hemoglobin,
+            mean_corpuscular_hemoglobin_concentration_mchc,
+            mean_corpuscular_hemoglobin_mch, mean_corpuscular_volume_mcv))
+```
+
+Fig 1.2c Checking Data Balance for response
+```{r}
+names(data_task1$task1_resp)<-NULL
+freq_res<-table(data_task1$task1_resp)
+pie(freq_res/sum(freq_res))
+
+#table to show number of +ve & -ve cases
+table(data_task1$task1_resp)
+```
+
+Figure 1.2d - Distribution of positive vs negative 
+```{r}
+pos_case <- subset(data_task1, data_task1$task1_resp == "positive")
+neg_case <- subset(data_task1, data_task1$task1_resp == "negative")
+
+# positive cases by age
+ggplot (pos_case, aes(x = as.factor(patient_age_quantile), fill = 1)) +
+  geom_bar (stat = "count", position = position_dodge(), show.legend = FALSE) +
+  theme_classic () + labs (x = "Age class", y = "Number") + 
+  labs(title = 'Positive cases by Age class')
+
+# negative cases by age
+ggplot (neg_case, aes (x = as.factor(patient_age_quantile), fill = 1)) +
+  geom_bar (stat = "count", position = position_dodge (), show.legend = FALSE) +
+  labs(title = 'Negative cases by Age class')+
+  theme_classic () + labs (x = "Age class", y = "Number")
+```
+
+Figure 1.2e - Boxplot to handle outliers
+```{r include=TRUE, fig.height=18, fig.width= 30}
+data_task1 %>% 
+  pivot_longer(-c(1,4), names_to = 'variable', values_to = 'value') %>% 
+  ggplot(aes(x = variable, y = value, fill = task1_resp)) +
+  stat_boxplot(geom = 'errorbar', size = 0.3) +
+  geom_boxplot() +
+  labs(title = 'Boxplot of covariates by group') + 
+  theme(axis.text.x = element_text(size = 20,angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 20),
+        axis.title.y = element_text(size = 20))
+```
+handling outliers
+```{r}
+neg_case%>%
+   dplyr::select(basophils,platelets,eosinophils,red_blood_cell_distribution_width_rdw)%>%
+  summary()
+```
+
+removing observations directly
+```{r}
+outliers_neg <- c(which(data_task1$platelets > 9),
+         which(data_task1$basophils > 4),
+         which(data_task1$eosinophils > 5),
+         which(data_task1$red_blood_cell_distribution_width_rdw > 6))
+outliers_neg
+
+data_task1<-data_task1%>%
+  slice(-outliers_neg)
+```
+
+
+##TASK2
+### PART 2 OF EDA  
+
+Continuing from section 1.1 after removing 100% null columns
+```{r}
+data2<-data%>%
+  filter(patient_addmited_to_intensive_care_unit_1_yes_0_no!=0|patient_addmited_to_regular_ward_1_yes_0_no!=0|patient_addmited_to_semi_intensive_unit_1_yes_0_no!=0)
+dim(data2)
+```
+
+Checking missing values for dataset
+```{r, include=TRUE, fig.height=12, fig.width= 20}
+apply(is.na(data2), 2, sum) %>% 
+  sort() %>% 
+  as.matrix() %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>% 
+  rename(variable = rowname, na_count = V1) %>% 
+  ggplot(aes(x = reorder(variable, na_count), y = na_count)) +
+  geom_col() + 
+  geom_text(aes(x = variable, y = na_count + 35, label = na_count, angle = 90), size = 3.5) +
+  labs(x = 'variable', title = 'Variables ordered by NA count') +
+  theme(axis.text.x = element_text(size=15,angle = 90, hjust = 1, vjust = 0.5))
+```
+
+As we have seen already the correlation between categorical variables and few of the numeric variables we will again remove those variables from our data and dropping rows with NA values for those columns
+```{r}
+data2<-data2 %>%
+  dplyr::select('patient_addmited_to_regular_ward_1_yes_0_no',
+                'patient_addmited_to_semi_intensive_unit_1_yes_0_no',
+                'patient_addmited_to_intensive_care_unit_1_yes_0_no',
+                'patient_age_quantile','basophils','eosinophils',
+                'leukocytes','lymphocytes','monocytes','platelets',
+                'red_blood_cell_distribution_width_rdw','red_blood_cells') %>% drop_na()
+
+#colnames(data2)
+```
+
+## FEATURE ENGINEERING
+```{r}
+data2<-data2%>%
+  rename(regular=1,semi=2,intensive=3)
+```
+
+We will bind the patient admitted to different wards into single variable "admitted_to" which will be the response variable for this task and will have factors as regular,semi-intensive,intensive
+```{r}
+data2 <- data2 %>% 
+  pivot_longer(c(regular,semi,intensive),names_to="admitted_to") %>% 
+  filter(value!= 0) %>% 
+  dplyr::select(admitted_to, everything()) %>% 
+  mutate(admitted_to = factor(admitted_to,levels =c('regular','semi','intensive'))) %>% 
+  dplyr::select(-value)
+```
+
+Visualizations
+Checking proportions of different levels
+```{r}
+table(data2$admitted_to)
+```
+
+Figure 1.2f
+```{r out.width = '90%', fig.width = 13, fig.asp = 1.2}
+data2%>%pivot_longer(-1, names_to = 'variable', values_to = 'value') %>%
+  mutate(variable = as.factor(variable)) %>% 
+  ggplot(aes(x = variable, y = value)) +
+  geom_violin(aes(fill = admitted_to)) +
+  facet_wrap(~variable, scales = 'free', ncol = 3) +
+  scale_fill_manual(values = c('#00AFBB', '#E7B800', '#FC4E07')) +
+  labs(title = 'Distribution of features by wards') +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        plot.title = element_text(size = 16))
+```
+We can see outliers are present but this time will not remove it as already we have less data
+
+
+Figure 1.2g -  Scatterplot showing distribution of wards in data for few variables
+```{r warning=FALSE,message=FALSE}
+colors <- c('red', 'blue', 'green')
+scatterplot3d::scatterplot3d(x = data2$monocytes, y = data2$lymphocytes, z = data2$leukocytes,
+                             pch = 16, color = colors[data2$admitted_to], angle = 55, type = 'h',
+                             xlab = 'monocytes', ylab = 'lymphocytes', zlab = 'leukocytes')
+legend(x = 'top', legend = levels(data2$admitted_to), col =  colors, pch = 16, 
+       inset = -0.15, xpd = TRUE, horiz = TRUE)
+```
+
+
+## SECTION 2 DATA ANALYSIS METHODS 
+### 2.1 TASK 1
+
+## 2.1.1 Data Splitting
+
+Splitting into training and testing
+```{r}
+set.seed(1)
+trn_split_index <- createDataPartition(data_task1$task1_resp,p=0.7,
+                                                 list = FALSE,times = 1)
+task1_train<-data_task1[trn_split_index,]
+task1_test<-data_task1[-trn_split_index,]
+```
+
+Checking data proportion in training set
+```{r}
+prop.table(table(task1_train$task1_resp))
+```
+
+## 2.1.2 MODELLING for imbalanced data
+
+Defining fit control
+```{r warning=FALSE,message=FALSE}
+fit_ctrl <- trainControl(method = 'repeatedcv',
+                     number = 10,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary)
+```
+
+### Model 2.1.2a - Logistic Regression 
+```{r warning=FALSE,message=FALSE}
+model_logist <- train(task1_resp~ .,task1_train,method = 'glm',
+                      family = 'binomial',trControl = fit_ctrl,metric = 'ROC')
+  
+summary(model_logist)
+print(model_logist)
+
+predict_logist<-predict(model_logist,task1_test)
+
+conf_mat_logist<-confusionMatrix(predict_logist,task1_test$task1_resp,dnn=c('Predicted','Observed'))
+conf_mat_logist
+```
+
+Linear Discriminant Analysis (LDA) 
+Figure 2.1.2b - Examining homogenity of variance by comparing covariate matrix ellipses for the +ve and-ve groups
+```{r warning=FALSE,message=FALSE}
+library(heplots)
+task1_train %>% 
+  dplyr::select(-c(1:4)) %>%
+  heplots::covEllipses(., task1_train$task1_resp, pooled = F, labels = '', variables = 1:7, var.cex = 0.7)
+```
+It can be seen that we don't have the same covariance matrices for each class, so assumption is not satisifed.
+
+Box's M-test for Covariance Matrices
+```{r warning=FALSE,message=FALSE}
+task1_train %>% 
+  dplyr::select(-c(1:4)) %>%
+  heplots::boxM(.,task1_train$task1_resp)
+```
+The Box’s M-test is rejecting the null hypothesis that the covariance matrices are equal, at 5% significant level.
+
+### Model 2.1.2b - LDA Classifier
+```{r warning=FALSE,message=FALSE}
+model_lda <- train(task1_resp~.,task1_train[-3],
+                   method= 'lda', trControl=fit_ctrl, metric='ROC')
+model_lda
+
+predict_lda<-predict(model_lda,task1_test)
+
+confusionMatrix(predict_lda,task1_test$task1_resp,dnn=c('Predicted','Observed'))
+```
+
+Figure 2.1.2c - Variable Importance 
+```{r}
+imprt<-varImp(model_lda,scale = FALSE)
+plot(imprt)
+```
+
+### Model 2.1.2c - QDA Classifier
+```{r warning=FALSE,message=FALSE}
+model_qda<-train(task1_resp~.,task1_train[,-3],method="qda",trControl=fit_ctrl,metric="ROC")
+model_qda
+
+predict_qda<-predict(model_qda,task1_test)
+confusionMatrix(predict_qda,task1_test$task1_resp,dnn=c('Predicted','Observed'))
+```
+
+Figure 2.1.2d - Combining models
+```{r}
+comb_res <- resamples(list(Logistic=model_logist,LDA=model_lda,QDA=model_qda))
+
+## plot
+bwplot(comb_res)
+```
+
+
+### Model 2.1.2d - Random Forest Classifier
+By default, number of trees is 500 and number of variables tried at each split is 3 in this case.
+```{r warning=FALSE,message=FALSE}
+model_rf<-train(task1_resp~.,task1_train,method='rf',trControl=fit_ctrl,metric="ROC")
+print(model_rf)
+
+pred_rf<-predict(model_rf,task1_test)
+confusionMatrix(pred_rf,task1_test$task1_resp,dnn = c('Predicted','Observed'))
+```
+
+Figure 2.1.2e - Variable Importance 
+```{r}
+imprt<-varImp(model_rf,scale = FALSE)
+plot(imprt)
+```
+
+
+## 2.1.3 DATA BALANCING using SMOTE
+
+Defining fit control but with sampling method 
+```{r warning=FALSE,message=FALSE}
+fit_ctrl_smote <- trainControl(method = 'repeatedcv',
+                     number = 10,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     sampling='smote')
+```
+
+
+## 2.1.4 Modeling for balanced data
+
+### Model 2.1.4a - LOGISTIC with SMOTE
+```{r warning=FALSE,message=FALSE}
+model_logist_smt <- train(task1_resp~ .,task1_train,method = 'glm',
+                      family = 'binomial',trControl = fit_ctrl_smote,metric = 'ROC')
+  
+model_logist_smt
+
+predict_logist_smt<-predict(model_logist_smt,task1_test)
+
+confusionMatrix(predict_logist_smt,task1_test$task1_resp,dnn = c('Predicted','Observed'))
+```
+
+### Model 2.1.4b - LDA with SMOTE
+```{r warning=FALSE,message=FALSE}
+model_lda_smt<-train(task1_resp~.,task1_train[-3],method="lda",trControl=fit_ctrl_smote,metric="ROC")
+model_lda_smt
+
+pred_lda_smt<-predict(model_lda_smt,task1_test,)
+confusionMatrix(pred_lda_smt,task1_test$task1_resp,dnn=c('Predicted','Observed'))
+```
+
+### Model 2.1.4c - QDA with SMOTE
+```{r warning=FALSE,message=FALSE}
+model_qda_smt<-train(task1_resp~.,task1_train[-3],method="qda",trControl=fit_ctrl_smote,metric="ROC")
+model_qda_smt
+
+pred_qda_smt<-predict(model_qda_smt,task1_test)
+confusionMatrix(pred_qda_smt,task1_test$task1_resp,dnn=c('Predicted','Observed'))
+```
+
+Combining results for classifiers with SMOTE using resamples
+```{r}
+comb_res_smote <- resamples(list(Logistic_SMOTE=model_logist_smt,LDA_SMOTE=model_lda_smt,
+                           QDA_SMOTE=model_qda_smt))
+```
+
+### Model 2.1.4d - Random Forest Classifier with SMOTE
+```{r warning=FALSE,message=FALSE}
+model_rf_smt<-train(task1_resp~.,task1_train,method='rf',trControl=fit_ctrl_smote,,metric="ROC")
+model_rf_smt
+
+pred_rf_smt<-predict(model_rf_smt,task1_test)
+confusionMatrix(pred_rf_smt,task1_test$task1_resp,dnn = c('Predicted','Observed'))
+```
+
+Figure 2.1.4a - Comparing classifiers with and without SMOTE
+```{r include=TRUE,fig.height=6,fig.width=15}
+orig_metr <- summary(comb_res)[[1]] %>% 
+  pivot_longer(cols = 1:9) %>% 
+  separate(col = 'name', into = c('model', 'metric'), sep = '~')
+
+wid_smt_mtr <- summary(comb_res_smote)[[1]] %>% 
+  pivot_longer(cols = 1:9) %>% 
+  separate(col = 'name', into = c('model', 'metric'), sep = '~') %>% 
+  mutate(model = paste0(model, ' (SMOTE)'))
+
+orig_metr %>% 
+  bind_rows(wid_smt_mtr) %>% 
+  ggplot(aes(x = model, y = value, fill = model)) +
+  stat_boxplot(geom = 'errorbar', size = 0.3) +
+  geom_boxplot() + facet_wrap(~metric) +
+  labs(title = 'Boxplot of metrics') + 
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())
+```
+
+
+### 2.2 TASK2
+
+## 2.2.1 Data splitting for training and testing
+```{r}
+set.seed(1)
+split_ind<-caret::createDataPartition(data2$admitted_to,p=0.7,list=F,times = 1)
+task2_train<-data2[split_ind,]
+task2_test<-data2[-split_ind,]
+```
+
+Checking proportions
+```{r}
+table(task2_train$admitted_to)
+```
+
+
+## 2.2.2 Model Construction
+
+Defining fit control again as this time its a multi-classification problem
+```{r warning=FALSE,message=FALSE}
+fit_ctrl2 <- trainControl(method = 'repeatedcv',
+                     number = 10,
+                     classProbs = TRUE,
+                     summaryFunction = multiClassSummary)
+```
+
+
+### Model 2.2.2a - MultiNOMIAL Model
+```{r warning=FALSE,message=FALSE}
+model_multinom<-train(admitted_to~.,task2_train,method='multinom',metric='AUC',
+                      trControl=fit_ctrl2,trace=FALSE)
+model_multinom
+
+probs<-predict(model_multinom,task2_test,type='prob')
+max_prob<-apply(probs,1,which.max)
+pred_multinom<-factor(max_prob,labels=levels(task2_train$admitted_to))
+
+confusionMatrix(pred_multinom,task2_test$admitted_to,dnn = c('Predicted','Observed'))
+```
+Figure 2.2.2a - Variable Importance for Multinomial Model 
+```{r}
+plot(varImp(model_multinom,scale=FALSE))
+```
+
+
+### Model 2.2.2b - Again with Random Forest classifier since it performed the best last time
+```{r warning=FALSE,message=FALSE}
+set.seed(123)
+model_rf2<-train(admitted_to~.,task2_train,method='rf',metric='AUC',trControl=fit_ctrl2,trace=FALSE)
+model_rf2
+
+pred_rf2<-predict(model_rf2,task2_test)
+confusionMatrix(pred_rf2,task2_test$admitted_to,dnn = c('Predicted','Observed'))
+```
+
+
+### Model 2.2.2c - SVM Non-Linear Classifier
+```{r warning=FALSE,message=FALSE}
+set.seed(123)
+model_svm<-train(admitted_to~.,task2_train,method='svmRadial',
+                 metric='AUC',trControl=fit_ctrl2)
+model_svm
+
+pred_svm<-predict(model_svm,task2_test)
+confusionMatrix(pred_svm,task2_test$admitted_to,dnn = c('Predicted','Observed'))
+```
+
+```{r}
+plot(model_svm)
+```
+At C=0.5, maximum AUC was obtained.
+
+### Model 2.2.2d - KNN-Classifier
+```{r warning=FALSE,message=FALSE}
+set.seed(123)
+model_knn<-train(admitted_to~.,task2_train,method='knn',metric='AUC',trControl=fit_ctrl2)
+model_knn
+
+pred_knn<-predict(model_knn,task2_test)
+confusionMatrix(pred_knn,task2_test$admitted_to,dnn = c('Predicted','Observed'))
+```
+
+```{r}
+plot(model_knn)
+```
+
+Figure 2.2.2b - Combining results
+```{r fig.width=15}
+comb_res_task2<-resamples(list(RForest=model_rf2,SVM=model_svm,Knn=model_knn))
+
+#Figure 2.2.2a - Results Comparison plot
+bwplot(comb_res_task2)
+```
+
+Figure 2.2.2c - Variable Importance for Best Classifier 
+```{r}
+plot(varImp(model_rf2,scale=FALSE))
+```
+In the feature importance plot, the top predcitors are the variables having highest distribution of response variable among them.
+
+
